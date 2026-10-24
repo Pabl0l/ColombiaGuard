@@ -1,0 +1,3 @@
+-dontwarn javax.annotation.**
+-keep class com.colombiaguard.domain.entity.** { *; }
+-keep class com.colombiaguard.data.local.** { *; }

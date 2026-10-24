@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Shield shape -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M54,18 L30,30 L30,54 C30,70 42,84 54,88 C66,84 78,70 78,54 L78,30 Z"/>
+    <!-- Colombian flag colors on shield -->
+    <path
+        android:fillColor="#003893"
+        android:pathData="M54,22 L32,33 L32,54 C32,68 43,81 54,85 L54,22 Z"/>
+    <path
+        android:fillColor="#FCD116"
+        android:pathData="M54,22 L76,33 L76,54 C76,68 65,81 54,85 L54,22 Z"/>
+    <!-- Center checkmark -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:strokeWidth="3"
+        android:strokeColor="#003893"
+        android:pathData="M42,54 L50,62 L66,46"/>
+</vector>

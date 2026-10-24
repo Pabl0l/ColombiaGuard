@@ -1,0 +1,46 @@
+# === Memoria interna del agente (NUNCA al repo) ===
+dev_*.md
+
+# === Android / Gradle ===
+.gradle/
+build/
+app/build/
+.kotlin/
+captures/
+.cxx/
+.externalNativeBuild/
+*.apk
+*.aab
+*.ap_
+*.dex
+*.class
+local.properties
+gradle-app.setting
+.gradle-temp/
+
+# === IDE ===
+.idea/
+*.iml
+*.hprof
+
+# === Firma / secretos ===
+*.jks
+*.keystore
+*.p12
+*.pfx
+keystore.properties
+env.properties
+.env
+.env.*
+!*.env.example
+*credentials*
+*secret*
+
+# === Artefactos de depuración locales ===
+crash.log
+logcat.txt
+ui*.xml
+current_screen.png
+pin_screen.png
+screenshot*.png
+settings_screen.png
