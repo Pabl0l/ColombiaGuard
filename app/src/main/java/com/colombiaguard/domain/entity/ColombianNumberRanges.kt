@@ -1,329 +1,166 @@
 package com.colombiaguard.domain.entity
 
 /**
- * Base de datos de rangos telefónicos colombianos.
- * Contiene los rangos reales asignados por la ANE (Agencia Nacional de Espectro)
- * y los operadores de telecomunicaciones de Colombia.
+ * Plan de numeración colombiano.
  *
- * Fuente: ANE Colombia, MinTIC, operadores (Claro, Movistar, Tigo, ETB, etc.)
- * Última actualización: 2025
+ * La detección es **estructural**, no una lista de prefijos móviles: en Colombia
+ * existe portabilidad numérica desde 2011, así que asociar un prefijo a un
+ * operador es información falsa, y una lista incompleta de prefijos haría que se
+ * bloquearan móviles legítimos. Reglas aplicadas (CRC / MinTIC):
+ *
+ * - Móvil: 10 dígitos que empiezan por `3`.
+ * - Fijo: 10 dígitos `60X` + 7 dígitos, con `X` en el plan de áreas vigente.
+ * - Especial: códigos de emergencia y líneas de atención (ver [PhoneNumbers]).
+ * - Extranjero: cualquier otra numeración con longitud internacional.
+ *
+ * Fuentes: CRC (marcación única nacional), MinTIC, operadores (Tigo, Claro, Movistar).
  */
 object ColombianNumberRanges {
 
-    /**
-     * Rangos móviles colombianos por prefijo de 3 dígitos.
-     * Formato nacional: 10 dígitos (sin código de país)
-     * Formato internacional: +57 + 10 dígitos
-     */
-    private val MOBILE_RANGES = mapOf(
-        // Claro (América Móvil)
-        "300" to "Claro",
-        "301" to "Claro",
-        "302" to "Claro",
-        "303" to "Claro",
-        "304" to "Claro",
-        "305" to "Claro",
+	/**
+	 * Códigos de área fijos vigentes (marcación única nacional).
+	 * El prefijo local dejó de existir en 2011: hoy se marca 60X + 7 dígitos.
+	 */
+	private val FIXED_AREA_CODES = mapOf(
+		"601" to "Bogotá D.C. / Cundinamarca",
+		"602" to "Cali / Cauca / Nariño / Valle",
+		"604" to "Medellín / Antioquia / Córdoba / Chocó",
+		"605" to "Barranquilla / Atlántico / Bolívar / Cesar / La Guajira / Magdalena / Sucre",
+		"606" to "Pereira / Caldas / Quindío / Risaralda",
+		"607" to "Bucaramanga / Arauca / Norte de Santander / Santander",
+		"608" to "Neiva / Boyacá / Caquetá / Casanare / Huila / Meta / Tolima / Amazonía"
+	)
 
-        // Movistar (Telefónica)
-        "310" to "Movistar",
-        "311" to "Movistar",
-        "312" to "Movistar",
-        "313" to "Movistar",
-        "314" to "Movistar",
-        "315" to "Movistar",
-        "316" to "Movistar",
-        "317" to "Movistar",
-        "318" to "Movistar",
-        "319" to "Movistar",
-        "320" to "Movistar",
-        "321" to "Movistar",
+	/** Indicativos de país usados solo para etiquetar llamadas extranjeras. */
+	private val FOREIGN_COUNTRIES = mapOf(
+		"1" to "USA/Canadá",
+		"7" to "Rusia",
+		"20" to "Egipto",
+		"27" to "Sudáfrica",
+		"33" to "Francia",
+		"34" to "España",
+		"39" to "Italia",
+		"44" to "Reino Unido",
+		"49" to "Alemania",
+		"51" to "Perú",
+		"52" to "México",
+		"54" to "Argentina",
+		"55" to "Brasil",
+		"56" to "Chile",
+		"57" to "Colombia",
+		"61" to "Australia",
+		"81" to "Japón",
+		"82" to "Corea del Sur",
+		"86" to "China",
+		"91" to "India",
+		"234" to "Nigeria"
+	)
 
-        // Tigo (Millicom)
-        "322" to "Tigo",
-        "323" to "Tigo",
-        "324" to "Tigo",
+	data class NumberInfo(
+		val isValid: Boolean,
+		val isColombian: Boolean,
+		val isMobile: Boolean,
+		val isFixed: Boolean,
+		val isSpecial: Boolean,
+		val isForeign: Boolean,
+		/** Descripción apta para mostrar al usuario ("Móvil", "Fijo · Bogotá…"). */
+		val label: String,
+		val category: String,
+		/** Dígitos canónicos (ver [PhoneNumbers.normalize]). */
+		val normalizedNumber: String
+	)
 
-        // ETB (Bogotá)
-        "325" to "ETB",
+	/**
+	 * Analiza un número y devuelve su clasificación. Nunca lanza: una entrada
+	 * basura se clasifica como "Desconocido".
+	 */
+	fun analyzeNumber(phoneNumber: String): NumberInfo {
+		val digits = PhoneNumbers.normalize(phoneNumber)
 
-        // Tigo (continuación)
-        "350" to "Tigo",
-        "351" to "Tigo",
+		if (PhoneNumbers.isEmergency(digits)) {
+			return NumberInfo(
+				isValid = true,
+				isColombian = true,
+				isMobile = false,
+				isFixed = false,
+				isSpecial = true,
+				isForeign = false,
+				label = "Emergencias",
+				category = "Especial",
+				normalizedNumber = digits
+			)
+		}
 
-        // WOM (nuevo operador)
-        "330" to "WOM",
-        "331" to "WOM",
-        "332" to "WOM",
-        "333" to "WOM",
-        "334" to "WOM",
+		// Móvil: 10 dígitos que empiezan por 3.
+		if (digits.length == 10 && digits.startsWith("3")) {
+			return NumberInfo(
+				isValid = true,
+				isColombian = true,
+				isMobile = true,
+				isFixed = false,
+				isSpecial = false,
+				isForeign = false,
+				label = "Móvil",
+				category = "Móvil",
+				normalizedNumber = digits
+			)
+		}
 
-        // Movistar (rangos adicionales)
-        "310" to "Movistar",
-        "320" to "Movistar"
-    )
+		// Fijo: 60X + 7 dígitos, con área vigente.
+		if (digits.length == 10 && digits.startsWith("60")) {
+			val area = FIXED_AREA_CODES[digits.take(3)]
+			if (area != null) {
+				return NumberInfo(
+					isValid = true,
+					isColombian = true,
+					isMobile = false,
+					isFixed = true,
+					isSpecial = false,
+					isForeign = false,
+					label = "Fijo · $area",
+					category = "Fijo",
+					normalizedNumber = digits
+				)
+			}
+		}
 
-    /**
-     * Rangos fijos colombianos por prefijo de 1-3 dígitos.
-     * Incluye Bogotá (601), Medellín (604), Cali (602), etc.
-     */
-    private val FIXED_RANGES = mapOf(
-        // Bogotá D.C.
-        "601" to "Fijo Bogotá",
+		// Cualquier otra numeración larga se considera extranjera.
+		if (digits.length >= 11) {
+			val country = detectCountry(digits)
+			return NumberInfo(
+				isValid = PhoneNumbers.hasValidFormat(digits),
+				isColombian = false,
+				isMobile = false,
+				isFixed = false,
+				isSpecial = false,
+				isForeign = true,
+				label = country?.let { "Extranjero · $it" } ?: "Extranjero",
+				category = "Extranjero",
+				normalizedNumber = digits
+			)
+		}
 
-        // Departamentos y ciudades principales
-        "602" to "Fijo Cali/Valle",
-        "604" to "Fijo Medellín/Antioquia",
-        "605" to "Fijo Barranquilla/Atlántico",
-        "606" to "Fijo Bucaramanga/Santander",
-        "607" to "Fijo Cundinamarca",
-        "608" to "Fijo Pereira/Risaralda",
-        "609" to "Fijo Neiva/Huila",
-        "610" to "Fijo Ibagué/Tolima",
-        "611" to "Fijo Cartagena/Bolívar",
-        "612" to "Fijo Sincelejo/Sucre",
-        "613" to "Fijo Tunja/Boyacá",
-        "614" to "Fijo Popayán/Cauca",
-        "615" to "Fijo Armenia/Quindío",
-        "616" to "Fijo Riohacha/La Guajira",
-        "617" to "Fijo Santa Marta/Magdalena",
-        "618" to "Fijo Valledupar/Cesar",
-        "619" to "Fijo Pasto/Nariño",
-        "620" to "Fijo Villavicencio/Meta",
-        "621" to "Fijo Florencia/Caquetá",
-        "622" to "Fijo Yopal/Casanare",
-        "623" to "Fijo Mocoa/Putumayo",
-        "624" to "Fijo Puerto Inírida/Guainía",
-        "625" to "Fijo San José del Guaviare/Guaviare",
-        "626" to "Fijo Leticia/Amazonas",
-        "627" to "Fijo Puerto Carreño/Vichada",
-        "628" to "Fijo Arauca/Arauca",
-        "629" to "Fijo Quibdó/Chocó",
-        "630" to "Fijo Montería/Córdoba",
-        "631" to "Fijo Sincelejo/Sucre",
-        "632" to "Fijo Barranca/Arauca",
-        "633" to "Fijo環太平洋",
-        "634" to "Fijo环太平洋",
-        "635" to "Fijo环太平洋",
-        "650" to "Fijo环太平洋"
-    )
+		// Ni colombiano ni extranjero reconocible (cortos, códigos de servicio…).
+		return NumberInfo(
+			isValid = PhoneNumbers.hasValidFormat(digits),
+			isColombian = false,
+			isMobile = false,
+			isFixed = false,
+			isSpecial = false,
+			isForeign = false,
+			label = "Desconocido",
+			category = "Desconocido",
+			normalizedNumber = digits
+		)
+	}
 
-    /**
-     * Números especiales colombianos.
-     */
-    private val SPECIAL_NUMBERS = mapOf(
-        "123" to "Emergencias",
-        "132" to "Ambulancia",
-        "125" to "Bomberos",
-        "141" to "Policía",
-        "112" to "Emergencias Internacionales",
-        "103" to "Línea de la Vida",
-        "106" to "Defensa Civil",
-        "119" to "Cruz Roja",
-        "144" to "Línea contra violencia de género",
-        "155" to "Línea contra tortura",
-        "147" to "Contact Center MinTIC"
-    )
+	/** Verifica si un número tiene un formato plausible (E.164: 7 a 15 dígitos). */
+	fun hasValidFormat(phoneNumber: String): Boolean = PhoneNumbers.hasValidFormat(phoneNumber)
 
-    /**
-     * Prefijos internacionales comunes (no colombianos).
-     * Para detección rápida de llamadas extranjeras.
-     */
-    private val FOREIGN_PREFIXES = listOf(
-        "1" to "USA/Canadá",
-        "44" to "Reino Unido",
-        "34" to "España",
-        "52" to "México",
-        "51" to "Perú",
-        "56" to "Chile",
-        "54" to "Argentina",
-        "55" to "Brasil",
-        "49" to "Alemania",
-        "33" to "Francia",
-        "39" to "Italia",
-        "81" to "Japón",
-        "82" to "Corea del Sur",
-        "86" to "China",
-        "91" to "India",
-        "61" to "Australia",
-        "7" to "Rusia",
-        "20" to "Egipto",
-        "234" to "Nigeria",
-        "27" to "Sudáfrica"
-    )
-
-    data class NumberInfo(
-        val isValid: Boolean,
-        val isColombian: Boolean,
-        val isMobile: Boolean,
-        val isFixed: Boolean,
-        val isSpecial: Boolean,
-        val isForeign: Boolean,
-        val operator: String?,
-        val category: String,
-        val normalizedNumber: String
-    )
-
-    /**
-     * Analiza un número telefónico y retorna información completa.
-     * Maneja múltiples formatos:
-     * - +57 300 123 4567
-     * - 57 300 123 4567
-     * - 300 123 4567
-     * - 3001234567
-     * - +573001234567
-     */
-    fun analyzeNumber(phoneNumber: String): NumberInfo {
-        val normalized = normalizeNumber(phoneNumber)
-        val digitsOnly = normalized.replace("\\D".toRegex(), "")
-
-        // Verificar números especiales primero
-        if (isSpecialNumber(digitsOnly)) {
-            return NumberInfo(
-                isValid = true,
-                isColombian = true,
-                isMobile = false,
-                isFixed = false,
-                isSpecial = true,
-                isForeign = false,
-                operator = SPECIAL_NUMBERS[digitsOnly],
-                category = "Especial",
-                normalizedNumber = normalized
-            )
-        }
-
-        // Detectar si es colombiano
-        val colombianNumber = extractColombianNumber(digitsOnly)
-
-        return if (colombianNumber != null) {
-            val prefix3 = colombianNumber.take(3)
-            val prefix1 = colombianNumber.take(1)
-
-            val isMobile = MOBILE_RANGES.containsKey(prefix3)
-            val isFixed = FIXED_RANGES.containsKey(prefix3) || FIXED_RANGES.containsKey(prefix1)
-            val operator = MOBILE_RANGES[prefix3] ?: FIXED_RANGES[prefix3] ?: FIXED_RANGES[prefix1]
-
-            NumberInfo(
-                isValid = true,
-                isColombian = true,
-                isMobile = isMobile,
-                isFixed = isFixed,
-                isSpecial = false,
-                isForeign = false,
-                operator = operator,
-                category = when {
-                    isMobile -> "Móvil"
-                    isFixed -> "Fijo"
-                    else -> "Desconocido"
-                },
-                normalizedNumber = normalized
-            )
-        } else {
-            // No es colombiano - detectar país de origen
-            val foreignInfo = detectForeignCountry(digitsOnly)
-            NumberInfo(
-                isValid = true,
-                isColombian = false,
-                isMobile = false,
-                isFixed = false,
-                isSpecial = false,
-                isForeign = true,
-                operator = foreignInfo?.second,
-                category = foreignInfo?.first ?: "Extranjero",
-                normalizedNumber = normalized
-            )
-        }
-    }
-
-    /**
-     * Normaliza un número telefónico a formato estándar.
-     * Elimina espacios, guiones, paréntesis y otros caracteres.
-     */
-    private fun normalizeNumber(phoneNumber: String): String {
-        var num = phoneNumber.trim()
-
-        // Si empieza con +, quitarlo para análisis
-        if (num.startsWith("+")) {
-            num = num.substring(1)
-        }
-
-        // Eliminar caracteres no numéricos
-        return num.replace("\\D".toRegex(), "")
-    }
-
-    /**
-     * Extrae el número colombiano de un string de dígitos.
-     * Maneja prefijos de país (57) y formatos variados.
-     */
-    private fun extractColombianNumber(digits: String): String? {
-        // Caso 1: Empieza con 57 (código de país sin +)
-        if (digits.startsWith("57") && digits.length >= 12) {
-            val withoutCountry = digits.substring(2)
-            if (isValidColombianLocal(withoutCountry)) {
-                return withoutCountry
-            }
-        }
-
-        // Caso 2: 10 dígitos que parecen colombianos
-        if (digits.length == 10 && isValidColombianLocal(digits)) {
-            return digits
-        }
-
-        // Caso 3: 7 u 8 dígitos (número fijo sin código de país)
-        if ((digits.length == 7 || digits.length == 8) && isValidColombianFixed(digits)) {
-            return digits
-        }
-
-        return null
-    }
-
-    /**
-     * Valida si un número de 10 dígitos es colombiano móvil válido.
-     */
-    private fun isValidColombianLocal(number: String): Boolean {
-        if (number.length != 10) return false
-        val prefix3 = number.take(3)
-        return MOBILE_RANGES.containsKey(prefix3)
-    }
-
-    /**
-     * Valida si un número de 7-8 dígitos es fijo colombiano válido.
-     */
-    private fun isValidColombianFixed(number: String): Boolean {
-        val prefix3 = number.take(3)
-        val prefix1 = number.take(1)
-        return FIXED_RANGES.containsKey(prefix3) || FIXED_RANGES.containsKey(prefix1)
-    }
-
-    /**
-     * Verifica si es un número especial (emergencias, líneas gratuitas).
-     */
-    private fun isSpecialNumber(digits: String): Boolean {
-        return SPECIAL_NUMBERS.containsKey(digits)
-    }
-
-    /**
-     * Detecta el país de origen de un número extranjero.
-     */
-    private fun detectForeignCountry(digits: String): Pair<String, String>? {
-        // Buscar prefijos de mayor a menor longitud
-        val sortedPrefixes = FOREIGN_PREFIXES.sortedByDescending { it.first.length }
-
-        for ((prefix, country) in sortedPrefixes) {
-            if (digits.startsWith(prefix) && digits.length > prefix.length) {
-                return Pair("Extranjero", country)
-            }
-        }
-
-        return null
-    }
-
-    /**
-     * Verifica si un número tiene un formato válido general.
-     * No necesariamente colombiano, pero con estructura correcta.
-     */
-    fun hasValidFormat(phoneNumber: String): Boolean {
-        val digits = phoneNumber.replace("\\D".toRegex(), "")
-        // Números válidos: entre 7 y 15 dígitos (estándar ITU-T E.164)
-        return digits.length in 7..15
-    }
+	private fun detectCountry(digits: String): String? {
+		// Prefijos de 1 a 3 dígitos, del más largo al más corto.
+		return (3 downTo 1)
+			.mapNotNull { length -> digits.take(length).takeIf { it.length == length } }
+			.firstNotNullOfOrNull { prefix -> FOREIGN_COUNTRIES[prefix] }
+	}
 }

@@ -6,7 +6,7 @@ package com.colombiaguard.domain.entity
  * - Frecuencia de llamadas
  * - Duración de las llamadas
  * - Patrones de numeración
- * - Comportamiento de挂断 rápido
+ * - Comportamiento de colgado rápido
  */
 object CallPatternAnalyzer {
 
@@ -32,6 +32,9 @@ object CallPatternAnalyzer {
      * Tiempo mínimo entre llamadas del mismo número para considerarlo spam (5 minutos).
      */
     private const val MIN_TIME_BETWEEN_CALLS_MS = 5 * 60 * 1000L
+
+    /** Longitud máxima del bloque que se comprueba como patrón repetido. */
+    private const val MAX_REPEAT_BLOCK = 5
 
     data class SpamIndicator(
         val type: SpamType,
@@ -64,7 +67,7 @@ object CallPatternAnalyzer {
     ): List<SpamIndicator> {
         val indicators = mutableListOf<SpamIndicator>()
 
-        // 1. Analizar挂断 rápido
+        // 1. Analizar colgado rápido
         if (callInfo.duration in 1 until MIN_CONNECTED_CALL_DURATION_MS) {
             indicators.add(
                 SpamIndicator(
@@ -77,8 +80,8 @@ object CallPatternAnalyzer {
 
         // 2. Analizar llamadas repetidas del mismo número
         val sameNumberCalls = recentCalls.filter {
-            it.phoneNumber == callInfo.phoneNumber &&
-            (callInfo.timestamp - it.timestamp) < PATTERN_WINDOW_MS
+            PhoneNumbers.sameNumber(it.phoneNumber, callInfo.phoneNumber) &&
+            (callInfo.timestamp - it.timestamp) in 0..PATTERN_WINDOW_MS
         }
 
         if (sameNumberCalls.size >= MAX_CALLS_PER_NUMBER_IN_WINDOW) {
@@ -93,12 +96,12 @@ object CallPatternAnalyzer {
 
         // 3. Analizar intervalo entre llamadas
         val lastCallFromNumber = recentCalls
-            .filter { it.phoneNumber == callInfo.phoneNumber }
+            .filter { PhoneNumbers.sameNumber(it.phoneNumber, callInfo.phoneNumber) }
             .maxByOrNull { it.timestamp }
 
         if (lastCallFromNumber != null) {
             val interval = callInfo.timestamp - lastCallFromNumber.timestamp
-            if (interval < MIN_TIME_BETWEEN_CALLS_MS) {
+            if (interval in 0 until MIN_TIME_BETWEEN_CALLS_MS) {
                 indicators.add(
                     SpamIndicator(
                         type = SpamType.REPEATED_CALLS,
@@ -150,37 +153,36 @@ object CallPatternAnalyzer {
 
     /**
      * Detecta patrones numéricos sospechosos.
-     * - Números secuenciales (1234567, 7654321)
-     * - Números repetidos (1111111, 2222222)
-     * - Patrones de prueba (0000000, 1234567)
+     * - Todos los dígitos iguales (1111111)
+     * - Secuencia ascendente/descendente completa (1234567, 7654321)
+     * - Bloque repetido en todo el número (123123123, 3003003000)
+     *
+     * No se usa "contiene 1234567": un móvil real como 3001234567 contiene esa
+     * secuencia y quedaría marcado como spam (falso positivo inaceptable).
      */
     private fun hasSuspiciousPattern(phoneNumber: String): Boolean {
-        val digits = phoneNumber.replace("\\D".toRegex(), "")
+        val digits = PhoneNumbers.normalize(phoneNumber)
 
         if (digits.length < 5) return false
 
-        // Números repetidos (111111, 222222, etc.)
-        val allSame = digits.all { it == digits[0] }
-        if (allSame) return true
+        // Todos los dígitos iguales (111111, 222222, etc.)
+        if (digits.all { it == digits[0] }) return true
 
-        // Secuencia ascendente (123456)
-        val ascending = digits.zipWithNext().all { (a, b) ->
-            b.digitToInt() - a.digitToInt() == 1
-        }
-        if (ascending) return true
+        // Secuencia ascendente (123456) o descendente (654321)
+        if (isStepSequence(digits, 1) || isStepSequence(digits, -1)) return true
 
-        // Secuencia descendente (654321)
-        val descending = digits.zipWithNext().all { (a, b) ->
-            a.digitToInt() - b.digitToInt() == 1
-        }
-        if (descending) return true
-
-        // Patrones de prueba comunes
-        val testPatterns = listOf("0000000", "1234567", "7654321", "0101010", "1010101")
-        if (testPatterns.any { digits.contains(it) }) return true
-
-        return false
+        return hasRepeatingBlock(digits)
     }
+
+    private fun isStepSequence(digits: String, step: Int): Boolean =
+        digits.zipWithNext().all { (a, b) -> b.digitToInt() - a.digitToInt() == step }
+
+    /** Bloque que se repite de principio a fin: 123123123, 0101010101. */
+    private fun hasRepeatingBlock(digits: String): Boolean =
+        (1..MAX_REPEAT_BLOCK).any { period ->
+            digits.length % period == 0 &&
+                digits.take(period).repeat(digits.length / period) == digits
+        }
 
     /**
      * Verifica si una llamada es fuera de horario comercial.

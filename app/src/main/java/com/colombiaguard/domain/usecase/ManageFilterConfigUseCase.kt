@@ -7,62 +7,36 @@ import kotlinx.coroutines.flow.Flow
 
 /**
  * Caso de uso para gestionar la configuración del filtro.
- * Principio SRP: Solo maneja configuración.
+ * SRP: solo maneja configuración.
  */
 class ManageFilterConfigUseCase(
-    private val filterConfigRepository: FilterConfigRepository
+	private val filterConfigRepository: FilterConfigRepository
 ) {
 
-    /**
-     * Observa cambios en la configuración.
-     */
-    fun observeConfig(): Flow<FilterConfig> {
-        return filterConfigRepository.getConfig()
-    }
+	fun observeConfig(): Flow<FilterConfig> = filterConfigRepository.getConfig()
 
-    /**
-     * Obtiene la configuración actual.
-     */
-    suspend fun getCurrentConfig(): FilterConfig {
-        return filterConfigRepository.getConfigOnce()
-    }
+	suspend fun getCurrentConfig(): FilterConfig = filterConfigRepository.getConfigOnce()
 
-    /**
-     * Cambia el nivel del filtro.
-     */
-    suspend fun setFilterLevel(level: FilterLevel) {
-        val current = filterConfigRepository.getConfigOnce()
-        filterConfigRepository.updateConfig(current.copy(level = level))
-    }
+	suspend fun setFilterLevel(level: FilterLevel) =
+		update { it.copy(level = level) }
 
-    /**
-     * Activa/desactiva bloqueo de llamadas extranjeras.
-     */
-    suspend fun setBlockForeign(block: Boolean) {
-        val current = filterConfigRepository.getConfigOnce()
-        filterConfigRepository.updateConfig(current.copy(blockForeignCalls = block))
-    }
+	suspend fun setBlockForeign(block: Boolean) =
+		update { it.copy(blockForeignCalls = block) }
 
-    /**
-     * Activa/desactiva silenciamiento de colombianos desconocidos.
-     */
-    suspend fun setSilenceUnknown(silence: Boolean) {
-        val current = filterConfigRepository.getConfigOnce()
-        filterConfigRepository.updateConfig(current.copy(silenceUnknownColombian = silence))
-    }
+	suspend fun setSilenceUnknown(silence: Boolean) =
+		update { it.copy(silenceUnknownColombian = silence) }
 
-    /**
-     * Activa/desactiva detección de patrones.
-     */
-    suspend fun setPatternDetection(enabled: Boolean) {
-        val current = filterConfigRepository.getConfigOnce()
-        filterConfigRepository.updateConfig(current.copy(enablePatternDetection = enabled))
-    }
+	suspend fun setPatternDetection(enabled: Boolean) =
+		update { it.copy(enablePatternDetection = enabled) }
 
-    /**
-     * Resetea la configuración a valores por defecto.
-     */
-    suspend fun resetToDefaults() {
-        filterConfigRepository.updateConfig(FilterConfig())
-    }
+	suspend fun setWhitelistContacts(enabled: Boolean) =
+		update { it.copy(whitelistAllContacts = enabled) }
+
+	suspend fun resetToDefaults() {
+		filterConfigRepository.updateConfig(FilterConfig())
+	}
+
+	private suspend fun update(transform: (FilterConfig) -> FilterConfig) {
+		filterConfigRepository.updateConfig(transform(filterConfigRepository.getConfigOnce()))
+	}
 }

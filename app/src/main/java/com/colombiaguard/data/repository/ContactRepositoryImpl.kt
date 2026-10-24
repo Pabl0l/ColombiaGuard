@@ -1,96 +1,106 @@
 package com.colombiaguard.data.repository
 
 import android.content.Context
+import android.database.ContentObserver
+import android.os.Handler
+import android.os.Looper
 import android.provider.ContactsContract
+import android.util.Log
+import com.colombiaguard.domain.entity.PhoneNumbers
 import com.colombiaguard.domain.repository.ContactRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 /**
- * Implementación de ContactRepository usando ContentResolver de Android.
- * Principio SRP: Solo accede a contactos del dispositivo.
+ * Implementación de ContactRepository usando ContentResolver.
+ *
+ * Optimización para la ventana de 5 s del CallScreeningService:
+ * - la agenda se lee una sola vez y se cachea **ya normalizada**;
+ * - `isNumberInContacts` pasa a ser una búsqueda O(1) en un `Set`;
+ * - el cache se invalida con un [ContentObserver] cuando cambia la agenda,
+ *   en lugar de quedar obsoleto hasta reiniciar el proceso.
  */
 class ContactRepositoryImpl(
-    private val context: Context
+	private val context: Context
 ) : ContactRepository {
 
-    /**
-     * Cache de números de contactos para evitar consultas repetidas.
-     */
-    private var contactNumbersCache: Set<String>? = null
+	@Volatile
+	private var cache: Set<String>? = null
 
-    override suspend fun isNumberInContacts(phoneNumber: String): Boolean {
-        val normalized = normalizeForComparison(phoneNumber)
-        val contacts = getAllContactNumbers()
-        return contacts.any { normalizeForComparison(it) == normalized }
-    }
+	@Volatile
+	private var lastTenCache: Set<String> = emptySet()
 
-    override suspend fun getAllContactNumbers(): Set<String> {
-        contactNumbersCache?.let { return it }
+	private val observer = object : ContentObserver(Handler(Looper.getMainLooper())) {
+		override fun onChange(selfChange: Boolean) {
+			Log.d(TAG, "Contacts changed, invalidating cache")
+			invalidate()
+		}
+	}
 
-        return withContext(Dispatchers.IO) {
-            val numbers = mutableSetOf<String>()
+	init {
+		runCatching {
+			context.contentResolver.registerContentObserver(
+				ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
+				true,
+				observer
+			)
+		}
+	}
 
-            try {
-                // [REFUERZO 4] Consultar números de teléfono de contactos
-                val projection = arrayOf(
-                    ContactsContract.CommonDataKinds.Phone.NUMBER,
-                    ContactsContract.CommonDataKinds.Phone.DISPLAY_NAME
-                )
+	override suspend fun isNumberInContacts(phoneNumber: String): Boolean {
+		val normalized = PhoneNumbers.normalize(phoneNumber)
+		if (normalized.isEmpty()) return false
+		getAllContactNumbers()
+		if (cache?.contains(normalized) == true) return true
+		// Tolerancia a contactos guardados sin indicativo (7 dígitos).
+		return normalized.length >= 10 && lastTenCache.contains(normalized.takeLast(10))
+	}
 
-                context.contentResolver.query(
-                    ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
-                    projection,
-                    null,
-                    null,
-                    null
-                )?.use { cursor ->
-                    val numberColumn = cursor.getColumnIndex(
-                        ContactsContract.CommonDataKinds.Phone.NUMBER
-                    )
+	override suspend fun getAllContactNumbers(): Set<String> {
+		cache?.let { return it }
 
-                    while (cursor.moveToNext()) {
-                        val number = cursor.getString(numberColumn)
-                        if (!number.isNullOrBlank()) {
-                            numbers.add(number)
-                        }
-                    }
-                }
-            } catch (e: SecurityException) {
-                // [REFUERZO 4] Permiso READ_CONTACTS no otorgado
-                // Retornar conjunto vacío en lugar de crashear
-                android.util.Log.w("ContactRepo", "READ_CONTACTS permission not granted: ${e.message}")
-                return@withContext emptySet()
-            } catch (e: Exception) {
-                android.util.Log.e("ContactRepo", "Error reading contacts: ${e.message}")
-                return@withContext emptySet()
-            }
+		return withContext(Dispatchers.IO) {
+			val numbers = mutableSetOf<String>()
+			val lastTen = mutableSetOf<String>()
 
-            contactNumbersCache = numbers
-            numbers
-        }
-    }
+			try {
+				val projection = arrayOf(ContactsContract.CommonDataKinds.Phone.NUMBER)
+				context.contentResolver.query(
+					ContactsContract.CommonDataKinds.Phone.CONTENT_URI,
+					projection,
+					null,
+					null,
+					null
+				)?.use { cursor ->
+					val index = cursor.getColumnIndex(ContactsContract.CommonDataKinds.Phone.NUMBER)
+					while (cursor.moveToNext()) {
+						val normalized = PhoneNumbers.normalize(cursor.getString(index) ?: continue)
+						if (normalized.isNotEmpty()) {
+							numbers.add(normalized)
+							if (normalized.length >= 10) lastTen.add(normalized.takeLast(10))
+						}
+					}
+				}
+			} catch (e: SecurityException) {
+				Log.w(TAG, "READ_CONTACTS no concedido: ${e.message}")
+				return@withContext emptySet()
+			} catch (e: Exception) {
+				Log.e(TAG, "Error leyendo contactos: ${e.message}")
+				return@withContext emptySet()
+			}
 
-    /**
-     * Normaliza un número para comparación.
-     * Elimina espacios, guiones, paréntesis y el código de país.
-     */
-    private fun normalizeForComparison(phoneNumber: String): String {
-        var num = phoneNumber.replace("\\D".toRegex(), "")
+			lastTenCache = lastTen
+			cache = numbers
+			numbers
+		}
+	}
 
-        // Si empieza con 57 (código Colombia), quitarlo
-        if (num.startsWith("57") && num.length >= 12) {
-            num = num.substring(2)
-        }
+	/** Fuerza la relectura de la agenda en la próxima consulta. */
+	fun invalidate() {
+		cache = null
+	}
 
-        // Si empieza con +, quitarlo
-        if (phoneNumber.startsWith("+")) {
-            num = phoneNumber.substring(1).replace("\\D".toRegex(), "")
-            if (num.startsWith("57") && num.length >= 12) {
-                num = num.substring(2)
-            }
-        }
-
-        return num
-    }
+	private companion object {
+		const val TAG = "ContactRepo"
+	}
 }

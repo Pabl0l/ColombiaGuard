@@ -1,352 +1,228 @@
 package com.colombiaguard.domain.usecase
 
-import com.colombiaguard.domain.entity.*
+import com.colombiaguard.domain.entity.CallClassification
+import com.colombiaguard.domain.entity.CallInfo
+import com.colombiaguard.domain.entity.CallPatternAnalyzer
+import com.colombiaguard.domain.entity.ColombianNumberRanges
+import com.colombiaguard.domain.entity.FilterConfig
+import com.colombiaguard.domain.entity.FilterLevel
+import com.colombiaguard.domain.entity.PhoneNumbers
+import com.colombiaguard.domain.entity.ScreeningResult
+import com.colombiaguard.domain.entity.VerificationStatus
 import com.colombiaguard.domain.repository.ContactRepository
 import com.colombiaguard.domain.repository.FilterConfigRepository
 import com.colombiaguard.domain.repository.NumberListRepository
 
 /**
- * Caso de uso principal: Filtrar una llamada entrante.
+ * Caso de uso principal: filtrar una llamada entrante.
  *
- * Orquesta toda la lógica de filtrado:
- * 1. Verificar whitelist/blacklist
- * 2. Validar si es número colombiano
- * 3. Analizar patrones de spam
- * 4. Aplicar nivel de filtro configurado
- * 5. Retornar clasificación final
+ * Orden de decisión (del más barato/al más caro):
+ * 1. Normalizar el número (fuente única: [PhoneNumbers]).
+ * 2. Emergencias → permitir siempre, incluso si están en la lista negra.
+ * 3. Blacklist → bloquear. Whitelist → permitir.
+ * 4. Contactos del usuario.
+ * 5. Aplicar el nivel de filtro configurado con el score de riesgo.
  *
- * Principios aplicados:
- * - SRP: Solo tiene una razón de cambio (reglas de filtrado)
- * - DIP: Depende de abstracciones (repositorios)
- * - OCP: Abierto a extensión (nuevas reglas) sin modificar existentes
+ * Principios: SRP (solo reglas de filtrado), DIP (depende de interfaces),
+ * OCP (nuevas reglas sin tocar las existentes) y fail-safe (un error de
+ * contactos se trata como "desconocido", nunca como bloqueo).
  */
 class ScreenCallUseCase(
-    private val contactRepository: ContactRepository,
-    private val filterConfigRepository: FilterConfigRepository,
-    private val numberListRepository: NumberListRepository
+	private val contactRepository: ContactRepository,
+	private val filterConfigRepository: FilterConfigRepository,
+	private val numberListRepository: NumberListRepository
 ) {
 
-    /**
-     * Ejecuta el filtrado completo de una llamada.
-     *
-     * @param callInfo Información de la llamada entrante
-     * @param recentCalls Llamadas recientes para análisis de patrones
-     * @return Resultado del screening con clasificación y razón
-     */
-    suspend fun execute(
-        callInfo: CallInfo,
-        recentCalls: List<CallInfo> = emptyList()
-    ): ScreeningResult {
+	/**
+	 * @param callInfo llamada entrante (cualquier formato de número)
+	 * @param recentCalls historial reciente para detección de patrones
+	 */
+	suspend fun execute(
+		callInfo: CallInfo,
+		recentCalls: List<CallInfo> = emptyList()
+	): ScreeningResult {
+		// 1. Normalizar: a partir de aquí todo compara en dígitos canónicos.
+		val normalized = PhoneNumbers.normalize(callInfo.phoneNumber)
+		if (normalized.length < 3) {
+			return ScreeningResult(CallClassification.ALLOW, "Número vacío o demasiado corto", isColombian = false)
+		}
+		val call = callInfo.copy(phoneNumber = normalized)
 
-        // [REFUERZO 1] Guard: número vacío o muy corto → permitir
-        if (callInfo.phoneNumber.isBlank() || callInfo.phoneNumber.replace("\\D".toRegex(), "").length < 3) {
-            return ScreeningResult(
-                classification = CallClassification.ALLOW,
-                reason = "Número demasiado corto o vacío",
-                isColombian = false
-            )
-        }
+		// 2. Emergencias: siempre pasan.
+		if (PhoneNumbers.isEmergency(normalized)) {
+			return ScreeningResult(
+				classification = CallClassification.ALLOW,
+				reason = "Número de emergencia",
+				isColombian = true,
+				matchedLabel = "Emergencias"
+			)
+		}
 
-        // [REFUERZO 2] Verificar si es emergencia ESPECIAL PRIMERO (antes de blacklist)
-        val isEmergency = isEmergencyNumber(callInfo.phoneNumber)
-        if (isEmergency) {
-            return ScreeningResult(
-                classification = CallClassification.ALLOW,
-                reason = "Número de emergencia",
-                isColombian = true,
-                matchedPrefix = callInfo.phoneNumber
-            )
-        }
+		// 3. Listas del usuario.
+		if (numberListRepository.isBlacklisted(normalized)) {
+			return ScreeningResult(CallClassification.BLOCK, "Número en lista negra", isColombian = false)
+		}
+		if (numberListRepository.isWhitelisted(normalized)) {
+			return ScreeningResult(CallClassification.WHITELISTED, "Número en lista blanca", isColombian = false)
+		}
 
-        // 1. Verificar blacklist (emergencias ya pasaron arriba)
-        if (numberListRepository.isBlacklisted(callInfo.phoneNumber)) {
-            return ScreeningResult(
-                classification = CallClassification.BLOCK,
-                reason = "Número en lista negra",
-                isColombian = false,
-                isKnownSpamPattern = false
-            )
-        }
+		// 4. Contactos (si falla el permiso se asume desconocido: fail-safe).
+		val isContact = runCatching { contactRepository.isNumberInContacts(normalized) }.getOrDefault(false)
 
-        // 2. Verificar whitelist (permiso inmediato)
-        if (numberListRepository.isWhitelisted(callInfo.phoneNumber)) {
-            return ScreeningResult(
-                classification = CallClassification.WHITELISTED,
-                reason = "Número en lista blanca",
-                isColombian = false,
-                isKnownSpamPattern = false
-            )
-        }
+		val numberInfo = ColombianNumberRanges.analyzeNumber(normalized)
+		val config = filterConfigRepository.getConfigOnce()
 
-        // 3. Verificar contactos del usuario (con fallback seguro)
-        val isContact = try {
-            contactRepository.isNumberInContacts(callInfo.phoneNumber)
-        } catch (e: Exception) {
-            false // [REFUERZO 4] Si falla permiso de contactos, tratar como desconocido
-        }
+		// 5. Números especiales (líneas de atención) merecen pasar.
+		if (numberInfo.isSpecial) {
+			return ScreeningResult(
+				classification = CallClassification.ALLOW,
+				reason = "Número de emergencia/especial",
+				isColombian = true,
+				matchedLabel = numberInfo.label
+			)
+		}
 
-        // 4. Analizar número colombiano
-        val numberInfo = ColombianNumberRanges.analyzeNumber(callInfo.phoneNumber)
+		val risk = riskScore(call, numberInfo.isColombian, recentCalls, isContact, config)
 
-        // 5. Obtener configuración actual
-        val config = filterConfigRepository.getConfigOnce()
+		return when (config.level) {
+			FilterLevel.STRICT -> applyStrictFilter(numberInfo, config, isContact, risk)
+			FilterLevel.NORMAL -> applyNormalFilter(call, numberInfo, config, isContact, risk)
+			FilterLevel.PERMISSIVE -> applyPermissiveFilter(call, numberInfo, risk)
+		}
+	}
 
-        // 6. Verificar si es número especial (emergencias siempre pasan)
-        if (numberInfo.isSpecial) {
-            return ScreeningResult(
-                classification = CallClassification.ALLOW,
-                reason = "Número de emergencia/especial",
-                isColombian = true,
-                matchedPrefix = callInfo.phoneNumber
-            )
-        }
+	/**
+	 * Score de riesgo 0..1: patrones + anti-spoofing + horario nocturno.
+	 * Se calcula una sola vez y lo consumen los tres niveles.
+	 */
+	private fun riskScore(
+		callInfo: CallInfo,
+		isColombian: Boolean,
+		recentCalls: List<CallInfo>,
+		isContact: Boolean,
+		config: FilterConfig
+	): Float {
+		var score = if (config.enablePatternDetection) {
+			CallPatternAnalyzer.calculateRiskScore(CallPatternAnalyzer.analyzeCall(callInfo, recentCalls))
+		} else {
+			0f
+		}
+		// Anti-spoofing: la red dice que el número no es válido.
+		if (callInfo.verificationStatus == VerificationStatus.FAILED && isColombian) {
+			score += 0.3f
+		}
+		// Noche + desconocido: señal adicional.
+		if (CallPatternAnalyzer.isOffHours(callInfo.timestamp) && !isContact) {
+			score += 0.15f
+		}
+		return score.coerceAtMost(1f)
+	}
 
-        // [REFUERZO 7] Analizar horario nocturno como factor de riesgo
-        val isNightTime = CallPatternAnalyzer.isOffHours(callInfo.timestamp)
+	/** Estricto: solo números colombianos válidos; el resto se bloquea. */
+	private fun applyStrictFilter(
+		numberInfo: ColombianNumberRanges.NumberInfo,
+		config: FilterConfig,
+		isContact: Boolean,
+		risk: Float
+	): ScreeningResult {
+		when {
+			numberInfo.isForeign -> return ScreeningResult(
+				CallClassification.BLOCK, "Número extranjero (modo estricto)", isColombian = false
+			)
+			!numberInfo.isColombian -> return ScreeningResult(
+				CallClassification.BLOCK, "Número no reconocido como colombiano", isColombian = false
+			)
+			risk > 0.7f -> return ScreeningResult(
+				CallClassification.BLOCK,
+				"Patrón de spam detectado (riesgo ${(risk * 100).toInt()}%)",
+				isColombian = true,
+				isKnownSpamPattern = true,
+				matchedLabel = numberInfo.label
+			)
+		}
 
-        // 7. Aplicar reglas según nivel de filtro
-        return when (config.level) {
-            FilterLevel.STRICT -> applyStrictFilter(callInfo, numberInfo, config, recentCalls, isContact, isNightTime)
-            FilterLevel.NORMAL -> applyNormalFilter(callInfo, numberInfo, config, recentCalls, isContact, isNightTime)
-            FilterLevel.PERMISSIVE -> applyPermissiveFilter(callInfo, numberInfo, config, recentCalls, isContact, isNightTime)
-        }
-    }
+		return if (isContact || config.whitelistAllContacts) {
+			ScreeningResult(
+				CallClassification.ALLOW,
+				"Número colombiano válido (${numberInfo.label})",
+				isColombian = true,
+				matchedLabel = numberInfo.label
+			)
+		} else {
+			ScreeningResult(
+				CallClassification.SILENCE,
+				"Número colombiano desconocido",
+				isColombian = true,
+				matchedLabel = numberInfo.label
+			)
+		}
+	}
 
-    /**
-     * Verifica si un número es de emergencia.
-     * [REFUERZO 2] Siempre permite emergencias aunque estén en blacklist.
-     */
-    private fun isEmergencyNumber(phoneNumber: String): Boolean {
-        val emergencyNumbers = listOf(
-            "123", "132", "125", "141", "112",
-            "103", "106", "119", "144", "155", "147",
-            "911", "000", "110", "118", "119"
-        )
-        val normalized = phoneNumber.replace("\\D".toRegex(), "")
-        return emergencyNumbers.any { normalized.endsWith(it) || normalized == it }
-    }
+	/** Normal: contactos y colombianos válidos pasan; riesgo alto bloquea. */
+	private fun applyNormalFilter(
+		callInfo: CallInfo,
+		numberInfo: ColombianNumberRanges.NumberInfo,
+		config: FilterConfig,
+		isContact: Boolean,
+		risk: Float
+	): ScreeningResult {
+		if (callInfo.verificationStatus == VerificationStatus.FAILED) {
+			return ScreeningResult(CallClassification.BLOCK, "Verificación de número falló", numberInfo.isColombian)
+		}
+		if (isContact) {
+			return ScreeningResult(CallClassification.ALLOW, "Contacto del usuario", numberInfo.isColombian)
+		}
+		if (numberInfo.isForeign) {
+			return if (config.blockForeignCalls) {
+				ScreeningResult(CallClassification.BLOCK, "Llamada extranjera bloqueada", isColombian = false)
+			} else {
+				ScreeningResult(CallClassification.SILENCE, "Llamada extranjera silenciada", isColombian = false)
+			}
+		}
+		if (!numberInfo.isColombian) {
+			return ScreeningResult(CallClassification.SILENCE, "Número no reconocido", isColombian = false)
+		}
 
-    /**
-     * Filtro estricto: Solo permitir números colombianos conocidos.
-     */
-    private suspend fun applyStrictFilter(
-        callInfo: CallInfo,
-        numberInfo: ColombianNumberRanges.NumberInfo,
-        config: FilterConfig,
-        recentCalls: List<CallInfo>,
-        isContact: Boolean,
-        isNightTime: Boolean
-    ): ScreeningResult {
-        // Números extranjeros siempre bloqueados en modo estricto
-        if (numberInfo.isForeign) {
-            return ScreeningResult(
-                classification = CallClassification.BLOCK,
-                reason = "Número extranjero bloqueado (modo estricto)",
-                isColombian = false
-            )
-        }
+		return when {
+			risk > 0.8f -> ScreeningResult(
+				CallClassification.BLOCK,
+				"Alto riesgo de spam (${(risk * 100).toInt()}%)",
+				isColombian = true,
+				isKnownSpamPattern = true
+			)
+			risk > 0.5f -> ScreeningResult(
+				CallClassification.SILENCE, "Riesgo moderado de spam", isColombian = true
+			)
+			config.silenceUnknownColombian -> ScreeningResult(
+				CallClassification.SILENCE, "Número colombiano desconocido", isColombian = true
+			)
+			else -> ScreeningResult(
+				CallClassification.ALLOW,
+				"Número colombiano válido (${numberInfo.label})",
+				isColombian = true,
+				matchedLabel = numberInfo.label
+			)
+		}
+	}
 
-        // Verificar verificación de red
-        if (callInfo.verificationStatus == VerificationStatus.FAILED) {
-            return ScreeningResult(
-                classification = CallClassification.BLOCK,
-                reason = "Verificación de número falló (posible spoofing)",
-                isColombian = numberInfo.isColombian
-            )
-        }
-
-        // Número colombiano válido
-        if (numberInfo.isColombian) {
-            // Analizar patrones de spam
-            val indicators = CallPatternAnalyzer.analyzeCall(callInfo, recentCalls)
-            var riskScore = CallPatternAnalyzer.calculateRiskScore(indicators)
-
-            // [REFUERZO 3] Anti-spoofing: verificación falló + parece colombiano = alto riesgo
-            if (callInfo.verificationStatus == VerificationStatus.FAILED && numberInfo.isColombian) {
-                riskScore = (riskScore + 0.3f).coerceAtMost(1.0f)
-            }
-
-            // [REFUERZO 7] Noche + desconocido = riesgo adicional
-            if (isNightTime && !isContact) {
-                riskScore = (riskScore + 0.15f).coerceAtMost(1.0f)
-            }
-
-            return if (riskScore > 0.7f) {
-                ScreeningResult(
-                    classification = CallClassification.BLOCK,
-                    reason = "Patrón de spam detectado (riesgo: ${(riskScore * 100).toInt()}%)",
-                    isColombian = true,
-                    isKnownSpamPattern = true,
-                    matchedPrefix = numberInfo.operator
-                )
-            } else if (isContact || config.whitelistAllContacts) {
-                ScreeningResult(
-                    classification = CallClassification.ALLOW,
-                    reason = "Número colombiano válido: ${numberInfo.operator ?: "Desconocido"}",
-                    isColombian = true,
-                    matchedPrefix = numberInfo.operator
-                )
-            } else {
-                ScreeningResult(
-                    classification = CallClassification.SILENCE,
-                    reason = "Número colombiano desconocido",
-                    isColombian = true,
-                    matchedPrefix = numberInfo.operator
-                )
-            }
-        }
-
-        // Número no reconocido
-        return ScreeningResult(
-            classification = CallClassification.BLOCK,
-            reason = "Número no reconocido como colombiano",
-            isColombian = false
-        )
-    }
-
-    /**
-     * Filtro normal: Permitir colombianos + silenciar desconocidos.
-     */
-    private suspend fun applyNormalFilter(
-        callInfo: CallInfo,
-        numberInfo: ColombianNumberRanges.NumberInfo,
-        config: FilterConfig,
-        recentCalls: List<CallInfo>,
-        isContact: Boolean,
-        isNightTime: Boolean
-    ): ScreeningResult {
-        // Verificar verificación de red
-        if (callInfo.verificationStatus == VerificationStatus.FAILED) {
-            return ScreeningResult(
-                classification = CallClassification.BLOCK,
-                reason = "Verificación de número falló",
-                isColombian = numberInfo.isColombian
-            )
-        }
-
-        // Contactos siempre pasan
-        if (isContact) {
-            return ScreeningResult(
-                classification = CallClassification.ALLOW,
-                reason = "Contacto del usuario",
-                isColombian = numberInfo.isColombian
-            )
-        }
-
-        // Números extranjeros
-        if (numberInfo.isForeign) {
-            return if (config.blockForeignCalls) {
-                ScreeningResult(
-                    classification = CallClassification.BLOCK,
-                    reason = "Llamada extranjera bloqueada",
-                    isColombian = false
-                )
-            } else {
-                ScreeningResult(
-                    classification = CallClassification.SILENCE,
-                    reason = "Llamada extranjera silenciada",
-                    isColombian = false
-                )
-            }
-        }
-
-        // Números colombianos
-        if (numberInfo.isColombian) {
-            val indicators = CallPatternAnalyzer.analyzeCall(callInfo, recentCalls)
-            var riskScore = CallPatternAnalyzer.calculateRiskScore(indicators)
-
-            // [REFUERZO 3] Anti-spoofing
-            if (callInfo.verificationStatus == VerificationStatus.FAILED && numberInfo.isColombian) {
-                riskScore = (riskScore + 0.3f).coerceAtMost(1.0f)
-            }
-
-            // [REFUERZO 7] Noche + desconocido = riesgo adicional
-            if (isNightTime && !isContact) {
-                riskScore = (riskScore + 0.15f).coerceAtMost(1.0f)
-            }
-
-            return when {
-                riskScore > 0.8f -> ScreeningResult(
-                    classification = CallClassification.BLOCK,
-                    reason = "Alto riesgo de spam (${(riskScore * 100).toInt()}%)",
-                    isColombian = true,
-                    isKnownSpamPattern = true
-                )
-                riskScore > 0.5f -> ScreeningResult(
-                    classification = CallClassification.SILENCE,
-                    reason = "Riesgo moderado de spam",
-                    isColombian = true
-                )
-                config.silenceUnknownColombian -> ScreeningResult(
-                    classification = CallClassification.SILENCE,
-                    reason = "Número colombiano desconocido",
-                    isColombian = true
-                )
-                else -> ScreeningResult(
-                    classification = CallClassification.ALLOW,
-                    reason = "Número colombiano válido: ${numberInfo.operator}",
-                    isColombian = true
-                )
-            }
-        }
-
-        // Default: silenciar
-        return ScreeningResult(
-            classification = CallClassification.SILENCE,
-            reason = "Número no reconocido",
-            isColombian = false
-        )
-    }
-
-    /**
-     * Filtro permisivo: Solo bloquear spam confirmado.
-     */
-    private suspend fun applyPermissiveFilter(
-        callInfo: CallInfo,
-        numberInfo: ColombianNumberRanges.NumberInfo,
-        config: FilterConfig,
-        recentCalls: List<CallInfo>,
-        isContact: Boolean,
-        isNightTime: Boolean
-    ): ScreeningResult {
-        // Solo bloquear si hay alta confianza de spam
-        val indicators = CallPatternAnalyzer.analyzeCall(callInfo, recentCalls)
-        var riskScore = CallPatternAnalyzer.calculateRiskScore(indicators)
-
-        // [REFUERZO 3] Anti-spoofing
-        if (callInfo.verificationStatus == VerificationStatus.FAILED && numberInfo.isColombian) {
-            riskScore = (riskScore + 0.3f).coerceAtMost(1.0f)
-        }
-
-        // [REFUERZO 7] Noche + desconocido = riesgo adicional
-        if (isNightTime && !isContact) {
-            riskScore = (riskScore + 0.15f).coerceAtMost(1.0f)
-        }
-
-        // Verificación falló = casi seguro spam
-        if (callInfo.verificationStatus == VerificationStatus.FAILED) {
-            return ScreeningResult(
-                classification = CallClassification.BLOCK,
-                reason = "Verificación de número falló",
-                isColombian = numberInfo.isColombian
-            )
-        }
-
-        // Solo bloquear con score muy alto
-        if (riskScore > 0.9f) {
-            return ScreeningResult(
-                classification = CallClassification.BLOCK,
-                reason = "Spam confirmado (confianza: ${(riskScore * 100).toInt()}%)",
-                isColombian = numberInfo.isColombian,
-                isKnownSpamPattern = true
-            )
-        }
-
-        // Todo lo demás pasa
-        return ScreeningResult(
-            classification = CallClassification.ALLOW,
-            reason = "Modo permisivo: llamada permitida",
-            isColombian = numberInfo.isColombian
-        )
-    }
+	/** Permisivo: solo bloquea spam con confianza muy alta. */
+	private fun applyPermissiveFilter(
+		callInfo: CallInfo,
+		numberInfo: ColombianNumberRanges.NumberInfo,
+		risk: Float
+	): ScreeningResult = when {
+		// La red dice que el número no es válido: casi seguro spoofing.
+		callInfo.verificationStatus == VerificationStatus.FAILED -> ScreeningResult(
+			CallClassification.BLOCK, "Verificación de número falló", numberInfo.isColombian
+		)
+		risk > 0.9f -> ScreeningResult(
+			CallClassification.BLOCK,
+			"Spam confirmado (confianza ${(risk * 100).toInt()}%)",
+			isColombian = numberInfo.isColombian,
+			isKnownSpamPattern = true
+		)
+		else -> ScreeningResult(
+			CallClassification.ALLOW, "Modo permisivo: llamada permitida", isColombian = numberInfo.isColombian
+		)
+	}
 }

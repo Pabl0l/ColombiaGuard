@@ -16,6 +16,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import com.colombiaguard.ui.config.ConfigScreen
 import com.colombiaguard.ui.home.HomeScreen
 import com.colombiaguard.ui.whitelist.WhitelistScreen
 import com.colombiaguard.ui.theme.*
@@ -110,29 +111,6 @@ fun MainScreen() {
             composable("whitelist") { WhitelistScreen(isWhitelist = true) }
             composable("blacklist") { WhitelistScreen(isWhitelist = false) }
             composable("config") { ConfigScreen() }
-        }
-    }
-}
-
-@Composable
-fun ConfigScreen() {
-    Surface(
-        modifier = Modifier.fillMaxSize(),
-        color = Background
-    ) {
-        Column(
-            modifier = Modifier.padding(16.dp)
-        ) {
-            Text(
-                text = "Configuracion",
-                style = MaterialTheme.typography.headlineMedium,
-                color = OnBackground
-            )
-            Spacer(modifier = Modifier.height(16.dp))
-            Text(
-                text = "Proximamente...",
-                color = OnSurfaceVariant
-            )
         }
     }
 }

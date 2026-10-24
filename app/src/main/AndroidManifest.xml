@@ -2,25 +2,28 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
-    <!-- Permisos de telecomunicaciones -->
-    <uses-permission android:name="android.permission.READ_PHONE_STATE" />
-    <uses-permission android:name="android.permission.READ_CALL_LOG" />
+    <!--
+        Solo permisos que el código usa realmente:
+        - READ_CONTACTS: reconocer llamadas de contactos (fail-safe si falta).
+        - RECEIVE_BOOT_COMPLETED: BootReceiver documenta el arranque.
+        - POST_NOTIFICATIONS: avisar de llamadas bloqueadas (Android 13+).
+        READ_CALL_LOG y READ_PHONE_STATE se retiraron: eran innecesarios y
+        READ_CALL_LOG es un permiso sensible con política especial en Play.
+    -->
     <uses-permission android:name="android.permission.READ_CONTACTS" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
-
-    <!-- [REFUERZO 6] Notificación de llamadas bloqueadas (Android 13+) -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
         android:name="com.colombiaguard.service.ColombiaGuardApp"
         android:allowBackup="true"
         android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
         android:label="@string/app_name"
         android:supportsRtl="true"
         android:theme="@style/Theme.ColombiaGuard"
         tools:targetApi="35">
 
-        <!-- Main Activity -->
         <activity
             android:name=".ui.MainActivity"
             android:exported="true"
@@ -31,7 +34,7 @@
             </intent-filter>
         </activity>
 
-        <!-- Call Screening Service -->
+        <!-- Servicio de filtrado: lo enlaza el sistema, no la app. -->
         <service
             android:name=".service.ColombiaGuardScreeningService"
             android:exported="true"
@@ -41,7 +44,6 @@
             </intent-filter>
         </service>
 
-        <!-- Boot Receiver - restart service on boot -->
         <receiver
             android:name=".service.BootReceiver"
             android:exported="true">
