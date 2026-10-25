@@ -14,7 +14,7 @@ Bloquea, silencia o permite llamadas **antes de que el teléfono suene**, sin en
 
 Decisiones de filtrado:
 
-- **Rangos numéricos colombianos**: identifica operador (Claro, Movistar, Tigo, WOM, ETB, etc.) y descarta números inválidos.
+- **Plan de numeración colombiano por estructura**: móvil `3XXXXXXXXX`, fijo `60X` + 7 dígitos con las áreas vigentes (601/602/604/605/606/607/608) y emergencias exactas. No se infiere el operador: en Colombia hay portabilidad numérica desde 2011, así que el prefijo no lo determina.
 - **Detección de spam por patrones**: llamadas repetidas, horarios nocturnos, duración cero, spoofing de red.
 - **Anti-spoofing**: usa `callerNumberVerificationStatus` de la red; una verificación fallida es señal fuerte de número falsificado.
 - **Whitelist / blacklist** persistentes con Room.
@@ -29,7 +29,7 @@ Clean Architecture en capas, sin frameworks de DI (inyección manual en `Colombi
 ```
 app/src/main/java/com/colombiaguard/
 ├── service/            # CallScreeningService, Application (compositor DI), BootReceiver
-├── ui/                 # Compose: home, whitelist/blacklist, theme
+├── ui/                 # Compose: home, whitelist/blacklist, config + ViewModels, theme
 ├── domain/
 │   ├── entity/         # CallInfo, FilterConfig, ScreeningResult, análisis de patrones y rangos
 │   ├── repository/     # Interfaces (abstracciones)
@@ -62,12 +62,25 @@ app/build/outputs/apk/debug/app-debug.apk
 
 `local.properties` con `sdk.dir=...` es local de cada máquina y **no se versiona**.
 
+## Tests y verificación
+
+```bash
+./gradlew testDebugUnitTest   # 59 tests unitarios (incluye la migración Room con Robolectric)
+./gradlew lintDebug           # 0 errores
+./gradlew assembleRelease     # R8 + shrinkResources, sin firmar
+```
+
+- `app/src/test/`: dominio (`PhoneNumbers`, `ColombianNumberRanges`, `CallPatternAnalyzer`), casos de uso, repositorios con DAOs en memoria y la migración `1 → 2` sobre SQLite real.
+- `.github/workflows/android.yml`: en cada push y PR corre tests + lint + `assembleDebug` + `assembleRelease` (JDK 17).
+
 ## Activar el filtro
 
-1. Instalar la APK.
-2. Ajustes → Aplicaciones → Acceso especial → **Aplicaciones de ID de llamada y spam** → ColombiaGuard.
-3. Conceder permisos de teléfono y contactos.
-4. En Android 13+, aceptar notificaciones para ver el registro de bloqueos.
+1. Instalar la APK (`app/build/outputs/apk/debug/app-debug.apk`).
+2. Abrir ColombiaGuard: si la tarjeta dice "Filtro inactivo", pulsar **Activar filtro** y aceptar el diálogo del sistema.
+3. Conceder el permiso de contactos (la app funciona sin él, pero no reconoce tus contactos).
+4. En Android 13+, aceptar notificaciones para ver el aviso de llamadas bloqueadas o silenciadas.
+
+Alternativa manual: Ajustes → Aplicaciones → Acceso especial → **Aplicaciones de ID de llamada y spam** → ColombiaGuard.
 
 Sin ese paso de configuración el sistema **no** entrega las llamadas a la app: es una restricción de Android,
 no un fallo de ColombiaGuard.
@@ -80,9 +93,12 @@ no un fallo de ColombiaGuard.
 
 ## Roadmap
 
+- [X] Tests unitarios de `ScreenCallUseCase`, `CallPatternAnalyzer` y repositorios
+- [X] Pantalla de configuración completa (niveles estricto / normal / permisivo)
+- [X] Migración de base de datos y esquema versionado
+- [ ] Medir cobertura (Kover) con umbral sobre `domain`
 - [ ] Exportar/importar listas y configuración
-- [ ] Tests unitarios de `ScreenCallUseCase` y `CallPatternAnalyzer`
-- [ ] Pantalla de configuración completa (niveles estricto / normal / permisivo)
+- [ ] Firmado de release (keystore por variables de entorno)
 - [ ] Base de datos de reportes de spam comunitaria (opt-in)
 
 ## Licencia

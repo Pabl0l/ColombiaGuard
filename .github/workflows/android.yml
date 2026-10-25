@@ -30,6 +30,9 @@ jobs:
       - name: Tests unitarios
         run: ./gradlew testDebugUnitTest --stacktrace
 
+      - name: Cobertura (umbral 80% en domain)
+        run: ./gradlew koverVerifyDebug koverXmlReportDebug
+
       - name: Lint
         run: ./gradlew lintDebug
 

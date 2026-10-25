@@ -102,12 +102,17 @@ class FakeCallHistoryRepository(
 ) : CallHistoryRepository {
 
 	val logged = mutableListOf<Pair<CallInfo, ScreeningResult>>()
+	var lastPurgeHours: Int? = null
+	var lastRecentHours: Int? = null
 
 	override suspend fun logCall(callInfo: CallInfo, result: ScreeningResult) {
 		logged += callInfo to result
 	}
 
-	override suspend fun getRecentCalls(hoursBack: Int): List<CallInfo> = recent
+	override suspend fun getRecentCalls(hoursBack: Int): List<CallInfo> {
+		lastRecentHours = hoursBack
+		return recent
+	}
 
 	override fun getBlockedCalls(): Flow<List<CallLogEntry>> = flowOf(emptyList())
 
@@ -115,7 +120,9 @@ class FakeCallHistoryRepository(
 
 	override suspend fun getStats(): CallStats = CallStats(0, 0, 0, 0, 0)
 
-	override suspend fun purgeOlderThan(hoursBack: Int) = Unit
+	override suspend fun purgeOlderThan(hoursBack: Int) {
+		lastPurgeHours = hoursBack
+	}
 }
 
 /** Timestamp en hora de Colombia, para no depender de la zona del runner. */

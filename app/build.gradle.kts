@@ -3,6 +3,7 @@ plugins {
 	id("org.jetbrains.kotlin.android")
 	id("org.jetbrains.kotlin.plugin.compose")
 	id("com.google.devtools.ksp")
+	id("org.jetbrains.kotlinx.kover")
 }
 
 android {
@@ -49,6 +50,24 @@ android {
 
 ksp {
 	arg("room.schemaLocation", "$projectDir/schemas")
+}
+
+kover {
+	reports {
+		filters {
+			// La cobertura se exige sobre la capa que decide si una llamada se
+			// bloquea. La UI de Compose y el código generado por Room no se
+			// miden como porcentaje del producto.
+			includes {
+				classes("com.colombiaguard.domain.*")
+			}
+		}
+		verify {
+			rule {
+				minBound(80)
+			}
+		}
+	}
 }
 
 dependencies {

@@ -66,7 +66,7 @@ class DatabaseMigrationTest {
 	private fun insert(number: String, label: String, whitelisted: Boolean) {
 		db.execSQL(
 			"INSERT OR REPLACE INTO number_list (phoneNumber, label, addedAt, isWhitelisted, source) VALUES (?, ?, ?, ?, ?)",
-			arrayOf(number, label, 1L, if (whitelisted) 1 else 0, "MANUAL")
+			arrayOf<Any>(number, label, 1L, if (whitelisted) 1 else 0, "MANUAL")
 		)
 	}
 
